@@ -1,0 +1,277 @@
+<html>
+
+<head>
+    
+</head>
+
+<body>
+    
+    <video id="localVideo" ></video>
+
+</body>
+
+
+
+
+    <script>
+
+        let localStream;
+        let webSocket
+        const localVideo = document.getElementById('localVideo');
+        var myInterval;
+    
+        
+
+        
+        async function start() {
+    
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+
+                localStream = stream;
+                localVideo.srcObject = stream;
+                localVideo.play()
+ 
+            } catch (e) {
+                alert(`getUserMedia() error: ${e.name}`);
+            }
+
+
+
+            // webSocket = new WebSocket("wss://ome.waraps.org:3334/app/testhaha?direction=send");
+            // webSocket = new WebSocket("ws://129.192.70.8:3333/app/test?direction=send");
+            webSocket = new WebSocket("ws://192.168.50.86:3333/app/test?direction=send");
+
+
+            webSocket.onopen = function () {
+                console.log("wsopened")
+                let obj_string = JSON.stringify( {command: 'request_offer'} )
+                console.log(obj_string)
+                
+                webSocket.send(obj_string)
+            }
+
+            webSocket.onclose = function () {
+                console.log("wsclosed")
+                ws = null
+                myInterval = setInterval(() => { start() }, 5000)
+            }
+        
+            webSocket.onmessage = function (e) {
+                var message = JSON.parse(e.data)
+                console.log( message.command )
+        
+
+                switch( message.command ){
+                    case "offer":
+                        createPeerConnection(
+                            message.id,
+                            message.peer_id,
+                            message.sdp,
+                            message.candidates,
+                            message.ice_servers
+                        );
+                        break;
+
+                }
+
+
+        
+            }
+
+
+
+
+        }
+    
+        start()
+    
+        function createPeerConnection(id, peerId, offer, candidates, iceServers){
+     
+            let peerConnectionConfig = {};
+            
+    
+            peerConnectionConfig.iceServers = [];
+    
+                console.log(candidates)
+                for (let i = 0; i < iceServers.length; i++) {
+    
+                    let iceServer = iceServers[i];
+    
+                    let regIceServer = {};
+    
+                    regIceServer.urls = iceServer.urls;
+    
+                    let hasWebSocketUrl = false;
+                    // let webSocketUrl = "saab.ome.waraps.org"
+                    let webSocketUrl = "192.168.50.86"
+    
+    
+    
+                    for (let j = 0; j < regIceServer.urls.length; j++) {
+    
+                        let serverUrl = regIceServer.urls[j];
+    
+                        if (serverUrl.indexOf(webSocketUrl) > -1) {
+                            hasWebSocketUrl = true;
+                            break;
+                        }
+                    }
+    
+                    if (!hasWebSocketUrl) {
+    
+                        if (regIceServer.urls.length > 0) {
+    
+                            let cloneIceServer = regIceServer.urls[0];
+                            let ip = findIp(cloneIceServer)
+                            console.log(ip)
+                            if (webSocketUrl && ip) {
+                                regIceServer.urls.push(cloneIceServer.replace(ip, webSocketUrl));
+                            }
+                        }
+                    }
+    
+                    regIceServer.username = iceServer.user_name;
+                    regIceServer.credential = iceServer.credential;
+    
+                    peerConnectionConfig.iceServers.push(regIceServer);
+                }
+    
+                // peerConnectionConfig.iceTransportPolicy = 'relay';
+    
+
+                console.log("config:", peerConnectionConfig)
+                let peerConnection = new RTCPeerConnection(peerConnectionConfig);
+                
+                // console.log(peerConnection)
+                
+                
+                
+                
+                
+                
+                console.log(offer) //SDP
+                console.log("💚 OFFER:",offer)
+                
+                
+                
+                localStream.getTracks().forEach(function (track) {
+                    
+                    peerConnection.addTrack(track, localStream);
+                    
+                    
+                });
+                
+                //STATE EVENT LISTENER
+                peerConnection.oniceconnectionstatechange = ev => {
+                    console.log(ev.target.iceConnectionState)
+                }
+                
+                //SET PREFERRED CODEC
+                let tcvr = peerConnection.getTransceivers()[1]
+                console.log("🧡 Tranceiver:",tcvr)
+
+                // let codecs = RTCRtpSender.getCapabilities('video').codecs
+                const {codecs} = RTCRtpSender.getCapabilities('video');
+                console.log("💙 Codecs:",codecs) //CODECS
+                
+                let vp9_codecs = [];
+
+                for(let i = 0; i < codecs.length; i++){
+
+                    if(codecs[i].mimeType == "video/H264"){
+                        vp9_codecs.push(codecs[i]);
+                    }
+                }
+
+                console.log("Prefered codecs:",vp9_codecs)
+
+                if(tcvr.setCodecPreferences != undefined){
+                    // tcvr.setCodecPreferences(vp9_codecs);
+                }
+
+                // tcvr.setCodecPreferences(vp9_codecs);
+
+
+                peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
+            .then(function () {
+
+                peerConnection.createAnswer()
+                    .then(function (answer) {
+
+                        console.log("ANSWER: ",answer)
+                        peerConnection.setLocalDescription(answer)
+                            .then(function () {
+
+                                webSocket.send(JSON.stringify( {"id": id, "peer_id": peerId, "command": 'answer', "sdp": answer } ))
+
+                            })
+                            .catch(function (error) {
+
+                                console.error('peerConnection.setLocalDescription', error);
+                              
+                            });
+                    })
+                    .catch(function (error) {
+
+                        console.error('peerConnection.createAnswer', error);
+                     
+                    });
+            })
+            .catch(function (error) {
+
+                console.error('peerConnection.setRemoteDescription', error);
+            
+            });
+
+            if (candidates) {
+
+            addIceCandidate(peerConnection, candidates);
+            }
+                
+                      
+        }
+    
+
+        function addIceCandidate(peerConnection, candidates) {
+
+            for (let i = 0; i < candidates.length; i++) {
+
+                if (candidates[i] && candidates[i].candidate) {
+
+                    let basicCandidate = candidates[i];
+
+                    peerConnection.addIceCandidate(new RTCIceCandidate(basicCandidate))
+                        .then(function () {
+                            console.log(peerConnection)
+                        })
+                        .catch(function (error) {
+
+                            console.error('peerConnection.addIceCandidate', error);
+                            errorHandler(error);
+                        });
+                }
+        }
+        }
+
+        function findIp(string) {
+
+        let result = '';
+        let match;
+
+        if (match = string.match(new RegExp('\\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b', 'gi'))) {
+            result = match[0];
+        }
+
+        return result;
+        }
+        
+    
+    
+    
+    
+    </script>
+
+
+
+</html>

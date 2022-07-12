@@ -1,0 +1,80 @@
+<html>
+
+<head>
+    
+</head>
+
+<body>
+    <video id="localVideo" muted></video>
+</body>
+
+
+    <script>
+        let localStream;
+        let webSocket
+        const localVideo = document.getElementById('localVideo');
+        const server_address = "192.168.50.86"
+    
+    
+        async function start() {
+    
+            webSocket = new WebSocket(`ws://${server_address}:3333/app/test`);
+
+            webSocket.onopen = function () {
+                webSocket.send(JSON.stringify( {command: 'request_offer'} ))
+            }
+        
+            webSocket.onmessage = async function (e) {
+                var message = JSON.parse(e.data)
+                console.log( "websocket onMessage",message )
+                if(message.command === "offer"){
+
+                    const config = await createConfig(message.ice_servers)
+                    createPC(config, message.id,message.peer_id,message.sdp,message.candidates)
+
+                }
+            }
+        }
+    
+        start()
+    
+    
+        const createConfig  = (iceServers) => {
+            
+            let myConfig = {};
+            myConfig.iceServers = [];
+            myConfig.iceServers.push({ "urls": iceServers[0].urls})
+            myConfig.iceServers[0].username = iceServers[0].user_name
+            myConfig.iceServers[0].credential = iceServers[0].credential
+            myConfig.iceServers[0].urls.push(`turn:${server_address}:3478?transport=tcp`) //Den här behövs ibland för att ansluta?? vet inte varför
+
+            return myConfig
+        }
+
+        const createPC = async (config, id, peerId, offer, candidates) => {
+            let peerConnection = await new RTCPeerConnection(config);
+            peerConnection.ontrack = function (e) {
+                localVideo.srcObject = e.streams[0];
+                localVideo.play()
+            }
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
+            await addIceCandidate(peerConnection, candidates);
+            const answer = await peerConnection.createAnswer()
+            await peerConnection.setLocalDescription(answer)
+
+            await webSocket.send(JSON.stringify( {"id": id, "peer_id": peerId, "command": 'answer', "sdp": answer } ))
+
+        }
+
+    function addIceCandidate(peerConnection, candidates) {
+
+    for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i] && candidates[i].candidate) {
+        let basicCandidate = candidates[i];
+        peerConnection.addIceCandidate(new RTCIceCandidate(basicCandidate))
+    }
+}
+}
+    </script>
+
+</html>
